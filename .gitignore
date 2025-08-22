@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# Logs & artifacts
+*.log
+*.tmp
+*.cache
+metrics.json
+
+# OS/editor
+.DS_Store
+.vscode/

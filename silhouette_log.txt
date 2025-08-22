@@ -1,0 +1,10 @@
+2025-08-21T16:58:47.236652 - Silhouette scheduler started.
+2025-08-21T16:58:47.247399 - Dispatching: Test post! Shroud is alive! 🚀 (dry_run=True)
+2025-08-21T16:58:47.247797 - [DRY RUN] Would post: 'Test post! Shroud is alive! 🚀' media=None
+2025-08-21T16:59:59.524879 - Silhouette scheduler started.
+2025-08-21T17:01:59.531624 - Dispatching: test-001 (dry_run=True)
+2025-08-21T17:01:59.532626 - [DRY RUN] Would post: 'Silhouette dry-run ping 🚀' media=None
+2025-08-21T17:02:59.536814 - Dispatching: test-001 (dry_run=True)
+2025-08-21T17:02:59.537307 - [DRY RUN] Would post: 'Silhouette dry-run ping 🚀' media=None
+2025-08-21T17:03:59.557490 - Dispatching: test-001 (dry_run=True)
+2025-08-21T17:03:59.557851 - [DRY RUN] Would post: 'Silhouette dry-run ping 🚀' media=None

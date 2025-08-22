@@ -1,0 +1,14 @@
+[
+  {
+    "id": "test-001",
+    "text": "Silhouette dry-run ping 🚀",
+    "due_at": "2000-01-01T00:00:00",
+    "media_path": "",
+    "posted": true,
+    "posted_at": "2025-08-21T17:03:59.556855",
+    "result": {
+      "ok": true,
+      "mock": true
+    }
+  }
+]
