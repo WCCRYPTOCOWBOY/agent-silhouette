@@ -1,108 +1,156 @@
-# scheduler.py — Silhouette
+# scheduler.py
+from __future__ import annotations
 
-import os, json, time
+import argparse
+import json
+import os
+import sys
+import traceback
 from datetime import datetime
-from utils.poster import post_content
-from utils.media_handler import prepare_media
+from typing import Any, Dict, List, Optional
 
-def getenv_any(names: list[str], default: str | None = None) -> str | None:
-    for n in names:
-        v = os.getenv(n)
-        if v is not None:
-            return v
-    return default
+# --- Project paths ---
+QUEUE_PATH = "post_queue.json"
+LOG_PATH   = "silhouette_log.txt"
 
-AGENT_NAME = getenv_any(["SILHOUETTE_NAME"], "Silhouette")
-
-QUEUE_FILE = getenv_any(
-    ["SILHOUETTE_QUEUE_FILE", "SHROUD_QUEUE_FILE"],
-    "post_queue.json"
+# --- Utilities (your modules) ---
+from utils.media_handler import prepare_media           # (media_path: str) -> Any | None
+from utils.poster import post_content                   # (text: str, media: Any) -> dict
+from utils.metrics import (
+    load_metrics, save_metrics, observe_attempt, Stopwatch
 )
-LOG_FILE = getenv_any(
-    ["SILHOUETTE_LOG_FILE", "SHROUD_LOG_FILE"],
-    "silhouette_log.txt"
-)
-SLEEP_SEC = int(getenv_any(
-    ["SILHOUETTE_DISPATCH_INTERVAL_SECONDS", "SHROUD_DISPATCH_INTERVAL_SECONDS"],
-    "15"
-))
-DRY_RUN = (getenv_any(
-    ["SILHOUETTE_DRY_RUN", "SHROUD_DRY_RUN"],
-    "true"
-) or "true").lower() == "true"
 
-def log_action(msg: str):
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f"{datetime.now().isoformat()} - {msg}\n")
+# ---------------------------
+# Logging helpers
+# ---------------------------
+def _utc_now_iso() -> str:
+    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
 
-def load_queue():
+def log_action(msg: str) -> None:
+    line = f"[{_utc_now_iso()}] {msg}"
+    print(line)
     try:
-        with open(QUEUE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        # If logging to file fails, don’t crash the job
+        pass
+
+# ---------------------------
+# Queue helpers
+# ---------------------------
+def load_queue() -> List[Dict[str, Any]]:
+    """Load posts list from JSON file. Return [] on any error."""
+    if not os.path.exists(QUEUE_PATH):
+        log_action(f"WARN: queue file not found at {QUEUE_PATH}; starting empty.")
         return []
 
-def save_queue(q):
-    with open(QUEUE_FILE, "w", encoding="utf-8") as f:
-        json.dump(q, f, indent=2, ensure_ascii=False)
-
-def parse_due(post):
-    """Accept 'timestamp' (YYYY-MM-DD HH:MM or ISO) OR epoch 'scheduled_ts'."""
-    if "scheduled_ts" in post and isinstance(post["scheduled_ts"], (int, float)):
-        return datetime.fromtimestamp(int(post["scheduled_ts"]))
-    ts = post.get("timestamp")
-    if not ts:
-        return None  # treat as 'now'
-    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
-        try:
-            return datetime.strptime(ts, fmt)
-        except ValueError:
-            pass
     try:
-        return datetime.fromisoformat(ts)
-    except Exception:
-        return None  # if unparseable, run now
+        with open(QUEUE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        log_action(f"ERROR loading queue: {e}")
+        return []
 
-def is_due(post, now_dt):
-    due = parse_due(post)
-    return (due is None) or (due <= now_dt)
+def maybe_limit(queue: List[Dict[str, Any]], limit: Optional[int]) -> List[Dict[str, Any]]:
+    if limit is None or limit <= 0:
+        return queue
+    return queue[:limit]
 
-def main_loop():
-    log_action(f"{AGENT_NAME} scheduler started.")
-    while True:
-        now_dt = datetime.now()
-        queue = load_queue()
-        updated = False
+# ---------------------------
+# Core per-job wrapper (metrics)
+# ---------------------------
+def process_job_with_metrics(
+    job: Dict[str, Any],
+    i: int,
+    queue_len_after_exec: int,
+    *,
+    args: argparse.Namespace,
+    metrics: Dict[str, Any],
+) -> None:
+    """
+    Wrap one job execution:
+      - prepare media
+      - post (or dry-run)
+      - measure time
+      - record success/failure + latency
+      - persist metrics atomically
+    """
+    post_id = str(job.get("id") or job.get("post_id") or f"idx_{i}")
 
-        for post in queue:
-            if post.get("posted"):
-                continue
-            if not is_due(post, now_dt):
-                continue
+    with Stopwatch() as sw:
+        ok = False
+        try:
+            # Prepare media if present
+            media = None
+            media_path = job.get("media_path")
+            if media_path:
+                media = prepare_media(media_path)
 
-            text = post.get("text", "")
-            media_path = post.get("media_path", "")
+            # Execute or dry-run
+            text = job.get("text", "")
+            if getattr(args, "dry_run", False):
+                log_action(f"DRY-RUN: Would post id={post_id!r} text={text!r} media={bool(media_path)}")
+            else:
+                result = post_content(text, media)
+                log_action(f"POSTED: id={post_id} result={result}")
 
-            try:
-                log_action(f"Dispatching: {post.get('id', text[:32])} (dry_run={DRY_RUN})")
-                media = prepare_media(media_path) if media_path else None
-                if DRY_RUN:
-                    log_action(f"[DRY RUN] Would post: '{text}' media={media}")
-                    result = {"ok": True, "mock": True}
-                else:
-                    result = post_content(text, media)
-                    log_action(f"Post result: {result}")
-                post["posted"] = True
-                post["posted_at"] = now_dt.isoformat()
-                post["result"] = result
-                updated = True
-            except Exception as e:
-                log_action(f"ERROR dispatching '{text[:32]}': {e}")
+            ok = True
 
-        if updated:
-            save_queue(queue)
+        except Exception as e:
+            log_action(f"ERROR posting {post_id}: {e}")
+            # Optional: dump stack to the log for debugging
+            tb = "".join(traceback.format_exception(*sys.exc_info()))
+            log_action(f"TRACE:\n{tb}")
+            ok = False
 
-        time.sleep(SLEEP_SEC)
+        finally:
+            observe_attempt(
+                metrics,
+                post_id=post_id,
+                ok=ok,
+                latency_ms=sw.elapsed_ms,
+                queue_depth_after=queue_len_after_exec,
+            )
+            save_metrics(metrics)
+
+# ---------------------------
+# CLI / Main
+# ---------------------------
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Silhouette Scheduler")
+    p.add_argument("--dry-run", action="store_true", help="Do everything except actually post")
+    p.add_argument("--limit", type=int, default=0, help="Max number of posts to process (0 = all)")
+    return p.parse_args()
+
+def main() -> int:
+    args = parse_args()
+
+    # Load queue
+    queue = load_queue()
+    queue = maybe_limit(queue, args.limit)
+    if not queue:
+        log_action("Queue empty. Nothing to do.")
+        # Still stamp metrics so last_run_at updates
+        m = load_metrics()
+        save_metrics(m)
+        return 0
+
+    # Init & stamp metrics
+    metrics = load_metrics()
+    log_action(f"Starting run: items={len(queue)} dry_run={args.dry_run}")
+
+    # Loop variant: enumerate (preserves list)
+    for i, job in enumerate(queue):
+        # How many items remain AFTER this attempt:
+        queue_len_after = max(0, len(queue) - (i + 1))
+        process_job_with_metrics(job, i, queue_len_after, args=args, metrics=metrics)
+
+    # Optional final heartbeat
+    save_metrics(metrics)
+    log_action("Run complete.")
+    return 0
 
 if __name__ == "__main__":
-    main_loop()
+    raise SystemExit(main())
