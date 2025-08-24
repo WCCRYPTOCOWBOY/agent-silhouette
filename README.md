@@ -3,7 +3,7 @@
 Agent Silhouette (Vol. 1 of S.M.A.K.)
 
 Silhouette is the first volume in the S.M.A.K. (Social Media Agent Krew) series.
-It’s a modular social media automation agent — designed for scheduled posting, media prep, and analytics tracking.
+It’s a modular social media automation agent designed for scheduled posting, media prep, and analytics tracking.
 
 Think of it as the quiet operator in the pit, making sure your content hits the line on time, every time. 🏁🤖✨
 
